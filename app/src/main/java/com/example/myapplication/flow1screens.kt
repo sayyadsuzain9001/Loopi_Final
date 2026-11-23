@@ -43,9 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import kotlinx.coroutines.delay
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.Base64
+import kotlinx.coroutines.launch
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
@@ -57,15 +55,6 @@ private val LoopiGreen = LoopiColors.Teal
 private val LoopiRed = LoopiColors.Red
 private val LoopiBackground = LoopiColors.Background
 
-private const val PREFS_NAME = "loopi_auth"
-
-private fun getAuthPreferences(
-    context: Context
-) = context.getSharedPreferences(
-    PREFS_NAME,
-    Context.MODE_PRIVATE
-)
-
 private const val PASSWORD_ITERATIONS = 210_000
 
 internal fun deriveSecretHash(secret: String, salt: ByteArray, iterations: Int = PASSWORD_ITERATIONS): ByteArray {
@@ -76,58 +65,6 @@ internal fun deriveSecretHash(secret: String, salt: ByteArray, iterations: Int =
         spec.clearPassword()
     }
 }
-
-private fun protectSecret(
-    preferences: android.content.SharedPreferences,
-    secret: String,
-    saltKey: String,
-    hashKey: String
-) {
-    val salt = ByteArray(16).also(SecureRandom()::nextBytes)
-    val hash = deriveSecretHash(secret, salt)
-    preferences.edit()
-        .putString(saltKey, Base64.getEncoder().encodeToString(salt))
-        .putString(hashKey, Base64.getEncoder().encodeToString(hash))
-        .apply()
-}
-
-private fun verifySecret(
-    preferences: android.content.SharedPreferences,
-    secret: String,
-    saltKey: String,
-    hashKey: String
-): Boolean {
-    val salt = preferences.getString(saltKey, null)?.let {
-        runCatching { Base64.getDecoder().decode(it) }.getOrNull()
-    } ?: return false
-    val expected = preferences.getString(hashKey, null)?.let {
-        runCatching { Base64.getDecoder().decode(it) }.getOrNull()
-    } ?: return false
-    val actual = deriveSecretHash(secret, salt)
-    return MessageDigest.isEqual(expected, actual)
-}
-
-private fun storePassword(preferences: android.content.SharedPreferences, password: String) {
-    protectSecret(preferences, password, "password_salt", "password_hash")
-    preferences.edit().remove("password").apply()
-}
-
-private fun verifyAndUpgradePassword(
-    preferences: android.content.SharedPreferences,
-    password: String
-): Boolean {
-    if (preferences.contains("password_hash")) {
-        return verifySecret(preferences, password, "password_salt", "password_hash")
-    }
-    // Upgrade credentials created by the earlier local prototype on successful sign-in.
-    val legacyPassword = preferences.getString("password", null) ?: return false
-    if (legacyPassword != password) return false
-    storePassword(preferences, password)
-    return true
-}
-
-private fun createRecoveryCode(): String = ByteArray(8).also(SecureRandom()::nextBytes)
-    .joinToString("") { "%02X".format(it.toInt() and 0xFF) }
 
 private fun validEmail(
     email: String
@@ -162,10 +99,11 @@ fun SplashScreen(
         delay(1500)
 
         // Returning users with an active session skip onboarding.
-        val prefs = getAuthPreferences(navController.context)
+        // The session flag lives in the Room table `users` (isLoggedIn).
+        val user = LoopiLocalStore.currentUser
         val destination = when {
-            !prefs.getBoolean("logged_in", false) -> "welcome"
-            !prefs.getBoolean("setup_completed", false) -> "first_time_setup"
+            user == null -> "welcome"
+            !user.setupCompleted -> "first_time_setup"
             else -> "home"
         }
 
@@ -405,12 +343,8 @@ fun SignInScreen(
     val context =
         LocalContext.current
 
-    val prefs =
-        remember {
-            getAuthPreferences(
-                context
-            )
-        }
+    val scope =
+        rememberCoroutineScope()
 
     var email by remember {
         mutableStateOf("")
@@ -656,53 +590,16 @@ fun SignInScreen(
                     return@Button
                 }
 
-                val savedEmail =
-                    prefs.getString(
-                        "email",
-                        null
-                    )
-
+                // Look the account up in Room and check the PBKDF2 password hash.
+                scope.launch {
+                when (val result = LoopiLocalStore.signIn(email, password)) {
+                    LoopiLocalStore.SignInResult.NoAccounts ->
+                        generalError = "No account found. Please sign up first."
+                    LoopiLocalStore.SignInResult.WrongCredentials ->
+                        generalError = "Incorrect email or password."
+                    is LoopiLocalStore.SignInResult.Success ->
                 if (
-                    savedEmail == null ||
-                    (!prefs.contains("password_hash") && !prefs.contains("password"))
-                ) {
-
-                    generalError =
-                        "No account found. Please sign up first."
-
-                    return@Button
-                }
-
-                if (
-                    !email.trim()
-                        .equals(
-                            savedEmail,
-                            ignoreCase = true
-                        ) ||
-                    !verifyAndUpgradePassword(prefs, password)
-                ) {
-
-                    generalError =
-                        "Incorrect email or password."
-
-                    return@Button
-                }
-
-                prefs.edit()
-                    .putBoolean(
-                        "logged_in",
-                        true
-                    )
-                    .apply()
-
-                val setupCompleted =
-                    prefs.getBoolean(
-                        "setup_completed",
-                        false
-                    )
-
-                if (
-                    setupCompleted
+                    result.user.setupCompleted
                 ) {
 
                     navController.navigate(
@@ -721,6 +618,8 @@ fun SignInScreen(
                     navController.navigate(
                         "first_time_setup"
                     )
+                }
+                }
                 }
             },
 
@@ -817,12 +716,8 @@ fun SignUpScreen(
     val context =
         LocalContext.current
 
-    val prefs =
-        remember {
-            getAuthPreferences(
-                context
-            )
-        }
+    val scope =
+        rememberCoroutineScope()
 
     var fullName by remember {
         mutableStateOf("")
@@ -1090,39 +985,15 @@ fun SignUpScreen(
                     passwordError == null
                 ) {
 
-                    if (!prefs.getString("email", null).isNullOrBlank()) {
-                        emailError = "A local account already exists. Sign in or use its recovery code."
-                        return@Button
+                    // Insert a new row into the Room table `users` (password stored only as a salted hash).
+                    scope.launch {
+                        when (LoopiLocalStore.signUp(fullName, email, password)) {
+                            LoopiLocalStore.SignUpResult.EmailTaken ->
+                                emailError = "An account with this email already exists. Sign in instead."
+                            LoopiLocalStore.SignUpResult.Created ->
+                                navController.navigate("account_created")
+                        }
                     }
-
-                    val recoveryCode = createRecoveryCode()
-                    storePassword(prefs, password)
-                    protectSecret(prefs, recoveryCode, "recovery_salt", "recovery_hash")
-
-                    prefs.edit()
-                        .putString(
-                            "full_name",
-                            fullName.trim()
-                        )
-                        .putString(
-                            "email",
-                            email.trim()
-                                .lowercase()
-                        )
-                        .putString("recovery_code_display", recoveryCode)
-                        .putBoolean(
-                            "logged_in",
-                            false
-                        )
-                        .putBoolean(
-                            "setup_completed",
-                            false
-                        )
-                        .apply()
-
-                    navController.navigate(
-                        "account_created"
-                    )
                 }
             },
 
@@ -1199,20 +1070,14 @@ fun AccountCreatedScreen(
     val context =
         LocalContext.current
 
-    val prefs =
-        remember {
-            getAuthPreferences(
-                context
-            )
-        }
+    val scope =
+        rememberCoroutineScope()
 
     val fullName =
-        prefs.getString(
-            "full_name",
-            ""
-        ) ?: ""
+        LoopiLocalStore.currentUser?.fullName.orEmpty()
 
-    val recoveryCode = prefs.getString("recovery_code_display", "") ?: ""
+    // Shown once from memory; only its hash is saved in the database.
+    val recoveryCode = remember { LoopiLocalStore.recoveryCodeToShow.orEmpty() }
 
     SuccessScreenLayout(
         emoji = "✅",
@@ -1238,7 +1103,7 @@ fun AccountCreatedScreen(
 
         onClick = {
 
-            prefs.edit().remove("recovery_code_display").apply()
+            LoopiLocalStore.consumeRecoveryCode()
 
             navController.navigate(
                 "first_time_setup"
@@ -1259,12 +1124,8 @@ fun ForgotPasswordScreen(
     val context =
         LocalContext.current
 
-    val prefs =
-        remember {
-            getAuthPreferences(
-                context
-            )
-        }
+    val scope =
+        rememberCoroutineScope()
 
     var email by remember {
         mutableStateOf("")
@@ -1417,43 +1278,15 @@ fun ForgotPasswordScreen(
                     return@Button
                 }
 
-                val savedEmail =
-                    prefs.getString(
-                        "email",
-                        null
-                    )
-
-                if (
-                    savedEmail == null ||
-                    !savedEmail.equals(
-                        email.trim(),
-                        ignoreCase = true
-                    )
-                ) {
-
-                    emailError =
-                        "Email or recovery code is incorrect."
-
-                    return@Button
+                scope.launch {
+                    if (!LoopiLocalStore.verifyRecovery(email, recoveryCode)) {
+                        emailError = "Email or recovery code is incorrect."
+                    } else {
+                        navController.navigate(
+                            "reset_password"
+                        )
+                    }
                 }
-
-                if (!verifySecret(prefs, recoveryCode, "recovery_salt", "recovery_hash")) {
-                    emailError = "Email or recovery code is incorrect."
-                    return@Button
-                }
-
-                prefs.edit()
-                    .putString(
-                        "reset_email",
-                        email.trim()
-                            .lowercase()
-                    )
-                    .putBoolean("reset_verified", true)
-                    .apply()
-
-                navController.navigate(
-                    "reset_password"
-                )
             },
 
             modifier =
@@ -1509,15 +1342,11 @@ fun ResetPasswordScreen(
     val context =
         LocalContext.current
 
-    val prefs =
-        remember {
-            getAuthPreferences(
-                context
-            )
-        }
+    val scope =
+        rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        if (!prefs.getBoolean("reset_verified", false) || prefs.getString("reset_email", null).isNullOrBlank()) {
+        if (!LoopiLocalStore.canResetPassword) {
             navController.navigate("forgot_password") {
                 popUpTo("reset_password") { inclusive = true }
             }
@@ -1720,11 +1549,8 @@ fun ResetPasswordScreen(
                     confirmError == null
                 ) {
 
-                    storePassword(prefs, password)
-                    prefs.edit()
-                        .remove("reset_email")
-                        .remove("reset_verified")
-                        .apply()
+                    scope.launch {
+                    LoopiLocalStore.resetPassword(password)
 
                     navController.navigate(
                         "signin"
@@ -1735,6 +1561,7 @@ fun ResetPasswordScreen(
                         ) {
                             inclusive = true
                         }
+                    }
                     }
                 }
             },
@@ -1794,12 +1621,8 @@ fun FirstTimeSetupScreen(
     val context =
         LocalContext.current
 
-    val prefs =
-        remember {
-            getAuthPreferences(
-                context
-            )
-        }
+    val scope =
+        rememberCoroutineScope()
 
     val interests =
         listOf(
@@ -1812,10 +1635,9 @@ fun FirstTimeSetupScreen(
         )
 
     val oldInterests =
-        prefs.getStringSet(
-            "interests",
-            emptySet()
-        ) ?: emptySet()
+        LoopiLocalStore.currentUser?.interests
+            ?.split(",")?.filter { it.isNotBlank() }?.toSet()
+            ?: emptySet()
 
     var selectedInterests by remember {
 
@@ -1999,24 +1821,13 @@ fun FirstTimeSetupScreen(
         Button(
             onClick = {
 
-                prefs.edit()
-                    .putStringSet(
-                        "interests",
-                        selectedInterests
-                    )
-                    .putBoolean(
-                        "setup_completed",
-                        true
-                    )
-                    .putBoolean(
-                        "logged_in",
-                        true
-                    )
-                    .apply()
+                scope.launch {
+                    LoopiLocalStore.completeSetup(selectedInterests)
 
-                navController.navigate(
-                    "setup_complete"
-                )
+                    navController.navigate(
+                        "setup_complete"
+                    )
+                }
             },
 
             enabled =

@@ -132,11 +132,8 @@ class LoopiAppState(
     private val reviewResultDao =
         database.reviewResultDao()
 
-    private val preferences =
-        appContext.getSharedPreferences(
-            "loopi_preferences",
-            Context.MODE_PRIVATE
-        )
+    // Small flags (streak, seed markers) are rows in the Room table `app_settings`.
+    private val preferences = LoopiLocalStore
 
     var reviewStreak by mutableStateOf(
         preferences.getInt(
@@ -212,19 +209,13 @@ class LoopiAppState(
 
                 createDefaultTopics()
 
-                preferences
-                    .edit()
-                    .putBoolean(
-                        "default_topics_created",
-                        true
-                    )
-                    .apply()
+                preferences.setBoolean("default_topics_created", true)
             }
 
             if (!preferences.getBoolean("starter_content_seeded_v1", false)) {
                 runCatching { seedMissingStarterCards() }
                     .onSuccess {
-                        preferences.edit().putBoolean("starter_content_seeded_v1", true).apply()
+                        preferences.setBoolean("starter_content_seeded_v1", true)
                     }
                     .onFailure {
                         message = "Starter study cards could not be prepared. You can still add your own cards."
@@ -394,13 +385,7 @@ class LoopiAppState(
 
         reviewStreak += 1
 
-        preferences
-            .edit()
-            .putInt(
-                "review_streak",
-                reviewStreak
-            )
-            .apply()
+        preferences.setInt("review_streak", reviewStreak)
     }
 }
 
@@ -438,8 +423,7 @@ fun Flow2HomeScreen(
 ) {
 
     val context = LocalContext.current
-    val settings = remember(context) { context.getSharedPreferences("loopi_settings", Context.MODE_PRIVATE) }
-    val dailyGoal = settings.getInt("daily_goal", 20)
+    val dailyGoal = LoopiLocalStore.getInt("daily_goal", 20)
 
     val cards = flow4State.allFlashcards.toList()
     val answers = flow4State.allResults.toList()

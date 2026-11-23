@@ -1,5 +1,9 @@
 package com.example.myapplication
 
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -87,19 +91,27 @@ private val starterPosts = listOf(
     GroupPost("net", "Sanjeet", "Made a pack for subnetting. Import it from Study Packs!", 0L)
 )
 
-class CommunityState(context: Context) {
-    private val prefs = context.getSharedPreferences("loopi_community", Context.MODE_PRIVATE)
-    private val authPrefs = context.getSharedPreferences("loopi_auth", Context.MODE_PRIVATE)
+/**
+ * Community state. Joined groups and the user's own posts are stored in the Room
+ * tables `community_memberships` and `community_posts`; the groups and their
+ * starter posts are built-in sample content.
+ */
+class CommunityState(context: Context, private val scope: CoroutineScope) {
+    private val dao = LoopiDatabase.getDatabase(context).communityDao()
 
-    val joined = mutableStateListOf<String>().apply {
-        addAll(prefs.getStringSet("joined", emptySet()).orEmpty())
-    }
-    val posts = mutableStateListOf<GroupPost>().apply {
-        addAll(starterPosts)
-        addAll(readPosts())
+    val joined = mutableStateListOf<String>()
+    val posts = mutableStateListOf<GroupPost>().apply { addAll(starterPosts) }
+
+    init {
+        scope.launch {
+            val memberships = withContext(Dispatchers.IO) { dao.getMemberships() }
+            val saved = withContext(Dispatchers.IO) { dao.getPosts() }
+            joined.addAll(memberships.map { it.groupId }.filterNot { it in joined })
+            posts.addAll(saved.map { GroupPost(it.groupId, it.author, it.text, it.postedAt) })
+        }
     }
 
-    val myName: String get() = authPrefs.getString("full_name", null)?.ifBlank { null } ?: "You"
+    val myName: String get() = LoopiLocalStore.currentUser?.fullName?.ifBlank { null } ?: "You"
 
     internal val groups: List<StudyGroup> get() = starterGroups
 
@@ -108,26 +120,20 @@ class CommunityState(context: Context) {
     internal fun memberCount(group: StudyGroup) = group.members.size + if (group.id in joined) 1 else 0
 
     fun toggleJoin(groupId: String) {
-        if (groupId in joined) joined.remove(groupId) else joined.add(groupId)
-        prefs.edit().putStringSet("joined", joined.toSet()).apply()
+        val leaving = groupId in joined
+        if (leaving) joined.remove(groupId) else joined.add(groupId)
+        scope.launch(Dispatchers.IO) {
+            if (leaving) dao.leave(groupId) else dao.join(CommunityMembershipEntity(groupId))
+        }
     }
 
     fun addPost(groupId: String, text: String) {
-        posts.add(GroupPost(groupId, myName, text.trim(), System.currentTimeMillis()))
-        val saved = JSONArray()
-        posts.filter { it.postedAt > 0 }.forEach {
-            saved.put(JSONObject().put("g", it.groupId).put("a", it.author).put("t", it.text).put("at", it.postedAt))
+        val post = GroupPost(groupId, myName, text.trim(), System.currentTimeMillis())
+        posts.add(post)
+        scope.launch(Dispatchers.IO) {
+            dao.insertPost(CommunityPostEntity(groupId = post.groupId, author = post.author, text = post.text, postedAt = post.postedAt))
         }
-        prefs.edit().putString("posts", saved.toString()).apply()
     }
-
-    private fun readPosts(): List<GroupPost> = runCatching {
-        val array = JSONArray(prefs.getString("posts", "[]"))
-        List(array.length()) {
-            val item = array.getJSONObject(it)
-            GroupPost(item.getString("g"), item.getString("a"), item.getString("t"), item.getLong("at"))
-        }
-    }.getOrDefault(emptyList())
 }
 
 @Composable
@@ -461,6 +467,7 @@ fun ReportProblemScreen(navController: NavHostController) {
     val typeError = showErrors && type.isBlank()
     val descriptionError = showErrors && description.trim().length < 10
 
+    val reportScope = rememberCoroutineScope()
     Scaffold(
         containerColor = LoopiColors.Background,
         topBar = { LoopiSimpleTopBar("Report a Problem") { navController.popBackStack() } }
@@ -536,8 +543,11 @@ fun ReportProblemScreen(navController: NavHostController) {
                 onClick = {
                     showErrors = true
                     if (type.isNotBlank() && description.trim().length >= 10) {
-                        saveProblemReport(context, type, description.trim(), steps.trim())
-                        saved = true
+                        val report = Triple(type, description.trim(), steps.trim())
+                        reportScope.launch {
+                            saveProblemReport(context, report.first, report.second, report.third)
+                            saved = true
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth().height(52.dp)
@@ -546,17 +556,12 @@ fun ReportProblemScreen(navController: NavHostController) {
     }
 }
 
-private fun saveProblemReport(context: Context, type: String, description: String, steps: String) {
-    val prefs = context.getSharedPreferences("loopi_support", Context.MODE_PRIVATE)
-    val reports = runCatching { JSONArray(prefs.getString("reports", "[]")) }.getOrDefault(JSONArray())
-    reports.put(
-        JSONObject()
-            .put("type", type)
-            .put("description", description)
-            .put("steps", steps)
-            .put("createdAt", System.currentTimeMillis())
-    )
-    prefs.edit().putString("reports", reports.toString()).apply()
+/** Saves the report as a row in the Room table `support_reports`. */
+private suspend fun saveProblemReport(context: Context, type: String, description: String, steps: String) {
+    withContext(Dispatchers.IO) {
+        LoopiDatabase.getDatabase(context).supportReportDao()
+            .insertReport(SupportReportEntity(type = type, description = description, steps = steps))
+    }
 }
 
 @Composable

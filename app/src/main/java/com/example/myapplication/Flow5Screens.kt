@@ -1,5 +1,7 @@
 package com.example.myapplication
 
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Brush
 import com.example.myapplication.ui.theme.LoopiColors
 import android.graphics.BitmapFactory
@@ -353,24 +355,25 @@ fun Flow5TopicProgressScreen(navController: NavHostController, appState: LoopiAp
 @Composable
 fun Flow5ProfileScreen(navController: NavHostController, appState: LoopiAppState, flow4State: Flow4AppState) {
     val context = LocalContext.current
-    val preferences = remember(context) { context.getSharedPreferences("loopi_auth", android.content.Context.MODE_PRIVATE) }
+    // Profile data comes from the signed-in row of the Room table `users`.
+    val user = LoopiLocalStore.currentUser
+    val scope = rememberCoroutineScope()
     val answers = flow4State.allResults.toList()
     val practiced = answers.map { it.topicId }.distinct().size
-    var fullName by remember(preferences) { mutableStateOf(preferences.getString("full_name", "").orEmpty()) }
-    var email by remember(preferences) { mutableStateOf(preferences.getString("email", "").orEmpty()) }
+    val fullName = user?.fullName.orEmpty()
+    val email = user?.email.orEmpty()
     var showEditName by remember { mutableStateOf(false) }
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var draftName by remember { mutableStateOf(fullName) }
     var draftEmail by remember { mutableStateOf(email) }
-    var draftStudentId by remember { mutableStateOf(preferences.getString("student_id", "").orEmpty()) }
-    var draftBio by remember { mutableStateOf(preferences.getString("profile_bio", "").orEmpty()) }
+    var draftStudentId by remember { mutableStateOf(user?.studentId.orEmpty()) }
+    var draftBio by remember { mutableStateOf(user?.bio.orEmpty()) }
     var nameError by remember { mutableStateOf<String?>(null) }
-    var profileImageUri by remember(preferences) { mutableStateOf(preferences.getString("profile_image_uri", null)) }
+    val profileImageUri = user?.profileImageUri
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            preferences.edit().putString("profile_image_uri", uri.toString()).apply()
-            profileImageUri = uri.toString()
+            LoopiLocalStore.setProfileImage(uri.toString())
         }
     }
     val profileBitmap = remember(profileImageUri) {
@@ -429,8 +432,8 @@ fun Flow5ProfileScreen(navController: NavHostController, appState: LoopiAppState
             ProfileMenuRow(Icons.Rounded.Edit, "Edit Profile", onClick = {
                 draftName = fullName
                 draftEmail = email
-                draftStudentId = preferences.getString("student_id", "").orEmpty()
-                draftBio = preferences.getString("profile_bio", "").orEmpty()
+                draftStudentId = user?.studentId.orEmpty()
+                draftBio = user?.bio.orEmpty()
                 nameError = null
                 showEditName = true
             })
@@ -488,16 +491,13 @@ fun Flow5ProfileScreen(navController: NavHostController, appState: LoopiAppState
                     } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(draftEmail.trim()).matches()) {
                         nameError = "Enter a valid university email."
                     } else {
-                        val updatedEmail = draftEmail.trim().lowercase()
-                        preferences.edit()
-                            .putString("full_name", updatedName)
-                            .putString("email", updatedEmail)
-                            .putString("student_id", draftStudentId.trim())
-                            .putString("profile_bio", draftBio.trim())
-                            .apply()
-                        fullName = updatedName
-                        email = updatedEmail
-                        showEditName = false
+                        scope.launch {
+                            if (LoopiLocalStore.updateProfile(updatedName, draftEmail, draftStudentId, draftBio)) {
+                                showEditName = false
+                            } else {
+                                nameError = "Another account already uses this email."
+                            }
+                        }
                     }
                 }) { Text("Save") }
             },
@@ -512,7 +512,7 @@ fun Flow5ProfileScreen(navController: NavHostController, appState: LoopiAppState
             text = { Text("Your study progress will remain saved on this device.") },
             confirmButton = {
                 TextButton(onClick = {
-                    preferences.edit().putBoolean("logged_in", false).apply()
+                    LoopiLocalStore.signOut()
                     showSignOutConfirmation = false
                     navController.navigate("welcome") {
                         popUpTo("home") { inclusive = true }
@@ -570,7 +570,8 @@ private fun ProfileMenuRow(icon: ImageVector, title: String, destructive: Boolea
 @Composable
 fun Flow6SettingsScreen(navController: NavHostController) {
     val context = LocalContext.current
-    val prefs = remember(context) { context.getSharedPreferences("loopi_settings", android.content.Context.MODE_PRIVATE) }
+    // Settings are rows in the Room table `app_settings`.
+    val prefs = LoopiLocalStore
     var reminders by remember { mutableStateOf(prefs.getBoolean("study_reminders", true)) }
     var dueAlerts by remember { mutableStateOf(prefs.getBoolean("review_due_alerts", true)) }
     var weakAlerts by remember { mutableStateOf(prefs.getBoolean("weak_topic_alerts", true)) }
@@ -583,13 +584,13 @@ fun Flow6SettingsScreen(navController: NavHostController) {
             ProgressHeader("Settings", onBack = { navController.popBackStack() })
             Text("Notifications", color = ProgressNavy, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             SettingsToggle("Study reminders", "Saved for this device. Reminder scheduling is not enabled in this demo.", reminders) {
-                reminders = it; prefs.edit().putBoolean("study_reminders", it).apply()
+                reminders = it; prefs.setBoolean("study_reminders", it)
             }
             SettingsToggle("Review due", "Preference saved locally. No notification scheduler is connected.", dueAlerts) {
-                dueAlerts = it; prefs.edit().putBoolean("review_due_alerts", it).apply()
+                dueAlerts = it; prefs.setBoolean("review_due_alerts", it)
             }
             SettingsToggle("Weak topic alerts", "Preference saved locally. No notification scheduler is connected.", weakAlerts) {
-                weakAlerts = it; prefs.edit().putBoolean("weak_topic_alerts", it).apply()
+                weakAlerts = it; prefs.setBoolean("weak_topic_alerts", it)
             }
             Text("Study preferences", color = ProgressNavy, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             Card(colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -598,24 +599,24 @@ fun Flow6SettingsScreen(navController: NavHostController) {
                     Text("Daily card goal", color = ProgressNavy, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(10, 20, 50, 100).forEach { value ->
-                            FilterChip(selected = dailyGoal == value, onClick = { dailyGoal = value; prefs.edit().putInt("daily_goal", value).apply() }, label = { Text("$value") })
+                            FilterChip(selected = dailyGoal == value, onClick = { dailyGoal = value; prefs.setInt("daily_goal", value) }, label = { Text("$value") })
                         }
                     }
                     HorizontalDivider()
                     Text("Default review mode", color = ProgressNavy, fontWeight = FontWeight.SemiBold)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = !weakOnly, onClick = { weakOnly = false; prefs.edit().putBoolean("weak_only_default", false).apply() })
-                        Text("All cards", modifier = Modifier.clickable { weakOnly = false; prefs.edit().putBoolean("weak_only_default", false).apply() })
+                        RadioButton(selected = !weakOnly, onClick = { weakOnly = false; prefs.setBoolean("weak_only_default", false) })
+                        Text("All cards", modifier = Modifier.clickable { weakOnly = false; prefs.setBoolean("weak_only_default", false) })
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = weakOnly, onClick = { weakOnly = true; prefs.edit().putBoolean("weak_only_default", true).apply() })
-                        Text("Weak cards only", modifier = Modifier.clickable { weakOnly = true; prefs.edit().putBoolean("weak_only_default", true).apply() })
+                        RadioButton(selected = weakOnly, onClick = { weakOnly = true; prefs.setBoolean("weak_only_default", true) })
+                        Text("Weak cards only", modifier = Modifier.clickable { weakOnly = true; prefs.setBoolean("weak_only_default", true) })
                     }
                 }
             }
             Text("App", color = ProgressNavy, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             SettingsToggle("Offline mode", "Your study data is already stored on this device; this choice is saved locally.", offlineMode) {
-                offlineMode = it; prefs.edit().putBoolean("offline_mode", it).apply()
+                offlineMode = it; prefs.setBoolean("offline_mode", it)
             }
             Card(colors = CardDefaults.cardColors(containerColor = Color.White),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp), shape = RoundedCornerShape(16.dp)) {

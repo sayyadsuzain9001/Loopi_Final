@@ -36,6 +36,9 @@ class MainActivity : ComponentActivity() {
 
         super.onCreate(savedInstanceState)
 
+        // Open Room and load the signed-in account + settings before the first screen.
+        LoopiLocalStore.init(applicationContext)
+
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
 
         setContent {
@@ -85,7 +88,7 @@ class MainActivity : ComponentActivity() {
 
                 val community =
                     remember {
-                        CommunityState(applicationContext)
+                        CommunityState(applicationContext, coroutineScope)
                     }
 
                 LoopiNavigation(

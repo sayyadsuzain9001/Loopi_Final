@@ -13,9 +13,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         FlashcardEntity::class,
         ResourceEntity::class,
         ReviewResultEntity::class,
-        StudyPackEntity::class
+        StudyPackEntity::class,
+        UserEntity::class,
+        AppSettingEntity::class,
+        CommunityMembershipEntity::class,
+        CommunityPostEntity::class,
+        SupportReportEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 abstract class LoopiDatabase : RoomDatabase() {
@@ -29,6 +34,14 @@ abstract class LoopiDatabase : RoomDatabase() {
     abstract fun reviewResultDao(): ReviewResultDao
 
     abstract fun studyPackDao(): StudyPackDao
+
+    abstract fun userDao(): UserDao
+
+    abstract fun appSettingDao(): AppSettingDao
+
+    abstract fun communityDao(): CommunityDao
+
+    abstract fun supportReportDao(): SupportReportDao
 
     companion object {
 
@@ -212,6 +225,54 @@ abstract class LoopiDatabase : RoomDatabase() {
                 }
             }
 
+        /*
+         * Migration:
+         * Version 8 -> Version 9
+         *
+         * Moves accounts, the login session, settings, community and
+         * support reports out of SharedPreferences into Room tables.
+         */
+        private val MIGRATION_8_9 =
+            object : Migration(8, 9) {
+                override fun migrate(database: SupportSQLiteDatabase) {
+                    database.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `users` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            `fullName` TEXT NOT NULL,
+                            `email` TEXT NOT NULL,
+                            `passwordSalt` TEXT NOT NULL,
+                            `passwordHash` TEXT NOT NULL,
+                            `recoverySalt` TEXT NOT NULL,
+                            `recoveryHash` TEXT NOT NULL,
+                            `interests` TEXT NOT NULL,
+                            `studentId` TEXT NOT NULL,
+                            `bio` TEXT NOT NULL,
+                            `profileImageUri` TEXT,
+                            `setupCompleted` INTEGER NOT NULL,
+                            `isLoggedIn` INTEGER NOT NULL,
+                            `createdAt` INTEGER NOT NULL,
+                            `lastLoginAt` INTEGER NOT NULL
+                        )
+                        """.trimIndent()
+                    )
+                    database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_users_email` ON `users` (`email`)")
+                    database.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `app_settings` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`key`))"
+                    )
+                    database.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `community_memberships` (`groupId` TEXT NOT NULL, `joinedAt` INTEGER NOT NULL, PRIMARY KEY(`groupId`))"
+                    )
+                    database.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `community_posts` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `groupId` TEXT NOT NULL, `author` TEXT NOT NULL, `text` TEXT NOT NULL, `postedAt` INTEGER NOT NULL)"
+                    )
+                    database.execSQL("CREATE INDEX IF NOT EXISTS `index_community_posts_groupId` ON `community_posts` (`groupId`)")
+                    database.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `support_reports` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `type` TEXT NOT NULL, `description` TEXT NOT NULL, `steps` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
+                    )
+                }
+            }
+
         fun getDatabase(
             context: Context
         ): LoopiDatabase {
@@ -232,7 +293,8 @@ abstract class LoopiDatabase : RoomDatabase() {
                                 MIGRATION_4_5,
                                 MIGRATION_5_6,
                                 MIGRATION_6_7,
-                                MIGRATION_7_8
+                                MIGRATION_7_8,
+                                MIGRATION_8_9
                             )
                             .build()
 

@@ -83,8 +83,8 @@ More screens are in [`report_screens/`](report_screens).
 | UI | Jetpack Compose, Material 3, Material Icons Extended |
 | Navigation | Navigation Compose (routes with arguments) |
 | State | Compose state holders (`mutableStateOf`, snapshot lists) fed by Room `Flow`s |
-| Database | Room 2.8 (SQLite), schema version 8 with migrations, KSP code generation |
-| Local settings & auth | SharedPreferences, PBKDF2-HMAC-SHA256 password hashing |
+| Database | Room 2.8 (SQLite), schema version 9 with migrations (10 tables), KSP code generation |
+| Accounts, session & settings | Room tables `users` and `app_settings`; passwords and recovery codes stored only as PBKDF2-HMAC-SHA256 hashes with a random salt |
 | PDF reading | [PdfBox-Android](https://github.com/TomRoush/PdfBox-Android) (offline text extraction) |
 | Question generation | Custom on-device generator (`McqGenerator.kt`), no network or AI service |
 | Sharing | Storage Access Framework (open/create document), Android share sheet |
@@ -99,7 +99,7 @@ More screens are in [`report_screens/`](report_screens).
 Loopi_Final/
 ├── app/
 │   ├── build.gradle.kts               # App module config and dependencies
-│   ├── schemas/                       # Exported Room schemas (v7, v8)
+│   ├── schemas/                       # Exported Room schemas (v7, v8, v9)
 │   └── src/
 │       ├── main/java/com/example/myapplication/
 │       │   ├── MainActivity.kt        # App entry point and navigation graph
@@ -189,7 +189,7 @@ It works best on lecture notes and slides that define terms. Scanned PDFs (photo
 
 - 📴 **Fully offline.** No backend, no analytics and no network calls.
 - 🔐 The account is local to the device. Passwords and recovery codes are stored as salted PBKDF2 hashes.
-- 🗄️ Topics, cards, resources, answers and packs live in a Room database on the phone. Uninstalling or clearing app data removes them.
+- 🗄️ Accounts, the login session, settings, topics, cards, resources, answers, packs, community groups/posts and problem reports all live in one Room database on the phone (`loopi_database`). Uninstalling or clearing app data removes them.
 - 🤝 Data only leaves the phone when you export or share a study pack yourself.
 
 ---

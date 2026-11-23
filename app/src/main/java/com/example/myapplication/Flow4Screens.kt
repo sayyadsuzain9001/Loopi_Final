@@ -1236,7 +1236,6 @@ fun ReviewSettingsScreen(
 ) {
 
     val context = LocalContext.current
-    val preferences = remember(context) { context.getSharedPreferences("loopi_settings", Context.MODE_PRIVATE) }
 
     val topic =
         appState.findTopic(
@@ -1258,7 +1257,7 @@ fun ReviewSettingsScreen(
             .setQuestionCountForTopic(
                 topicId
             )
-        flow4State.weakCardsOnly = preferences.getBoolean("weak_only_default", false)
+        flow4State.weakCardsOnly = LoopiLocalStore.getBoolean("weak_only_default", false)
     }
 
     Scaffold(
