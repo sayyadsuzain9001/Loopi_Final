@@ -662,6 +662,31 @@ fun SignInScreen(
             )
         }
 
+        Spacer(Modifier.height(10.dp))
+
+        // Demo account with sample history, for presentations.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(LoopiColors.AmberSoft, RoundedCornerShape(14.dp))
+                .padding(horizontal = 14.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = "Demo account (sample data)\n${DemoDataSeeder.DEMO_EMAIL} · ${DemoDataSeeder.DEMO_PASSWORD}",
+                fontSize = 13.sp,
+                color = LoopiColors.Ink,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = {
+                email = DemoDataSeeder.DEMO_EMAIL
+                password = DemoDataSeeder.DEMO_PASSWORD
+                emailError = null
+                passwordError = null
+                generalError = null
+            }) { Text("Use demo", fontWeight = FontWeight.Bold) }
+        }
+
         Spacer(
             modifier =
                 Modifier.height(18.dp)

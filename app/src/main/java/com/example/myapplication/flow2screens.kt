@@ -222,6 +222,9 @@ class LoopiAppState(
                     }
             }
 
+            // One-time demo account with sample history (labelled as demo on the sign-in screen).
+            runCatching { DemoDataSeeder.seedIfNeeded(database) }
+
             topicDao
                 .getAllTopics()
                 .collectLatest {
