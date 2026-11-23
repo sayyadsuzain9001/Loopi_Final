@@ -27,6 +27,38 @@ object DemoDataSeeder {
     )
 
     suspend fun seedIfNeeded(db: LoopiDatabase) {
+        seedMainIfNeeded(db)
+        seedResourcesIfNeeded(db)
+    }
+
+    /** Two sample resources so the resources table also has rows to show. */
+    private suspend fun seedResourcesIfNeeded(db: LoopiDatabase) {
+        val settings = db.appSettingDao()
+        if (settings.getAll().any { it.key == RESOURCES_FLAG }) return
+        val topic = db.topicDao().getTopicByTitle("Databases") ?: return
+        val now = System.currentTimeMillis()
+        db.resourceDao().insertResource(
+            ResourceEntity(
+                topicId = topic.id, type = "Note", title = "Normal forms summary (demo)",
+                content = "1NF: atomic values. 2NF: no partial dependency. 3NF: no transitive dependency.",
+                url = "", fileUri = "", description = "Sample note from the demo account", tags = "normalization, exam",
+                createdAt = now - 7 * DAY, updatedAt = now - 7 * DAY
+            )
+        )
+        db.resourceDao().insertResource(
+            ResourceEntity(
+                topicId = topic.id, type = "Link", title = "SQL JOIN reference (demo)",
+                content = "", url = "https://www.w3schools.com/sql/sql_join.asp", fileUri = "",
+                description = "Sample link from the demo account", tags = "sql, joins",
+                createdAt = now - 4 * DAY, updatedAt = now - 4 * DAY
+            )
+        )
+        settings.put(AppSettingEntity(RESOURCES_FLAG, "true"))
+    }
+
+    private const val RESOURCES_FLAG = "demo_resources_seeded_v1"
+
+    private suspend fun seedMainIfNeeded(db: LoopiDatabase) {
         val settings = db.appSettingDao()
         if (settings.getAll().any { it.key == FLAG }) return
         val topics = db.topicDao().getAllTopics().first()
