@@ -29,6 +29,14 @@ class McqGeneratorTest {
     }
 
     @Test
+    fun termsStartingWithAKeepTheirFirstLetter() {
+        val text = notes + "\nAgile development is an iterative approach where software is delivered in short sprints."
+        val questions = McqGenerator.generate(text, maxQuestions = 30)
+        assertTrue(questions.any { it.answer == "Agile development" })
+        assertTrue(questions.none { it.answer.startsWith("Gile", ignoreCase = true) })
+    }
+
+    @Test
     fun colonStyleNotesAreRecognised() {
         val questions = McqGenerator.generate(notes)
         assertTrue(questions.any { it.answer == "Transaction" && it.question.contains("all succeed") })

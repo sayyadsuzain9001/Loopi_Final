@@ -33,7 +33,7 @@ object McqGenerator {
     )
 
     private val definitionPattern = Regex(
-        "^(?:An?|The)?\\s*([A-Za-z][A-Za-z0-9()/\\- ]{1,48}?)\\s+(?:is|are|refers to|means|is defined as|is known as|is called|describes)\\s+(.{15,})$"
+        "^(?:(?:An?|The)\\s+)?([A-Za-z][A-Za-z0-9()/\\- ]{1,48}?)\\s+(?:is|are|refers to|means|is defined as|is known as|is called|describes)\\s+(.{15,})$"
     )
     private val colonPattern = Regex("^(?:[-•*\\u2022]\\s*)?([A-Za-z][A-Za-z0-9()/\\- ]{1,48}?)\\s*[:\\u2013\\u2014-]\\s+(.{15,})$")
 
